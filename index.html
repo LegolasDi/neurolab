@@ -114,6 +114,9 @@
           <span>Протоколы</span>
           <span id="historyCountBadge" class="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 text-xs font-semibold rounded-full bg-slate-100 text-slate-700">0</span>
         </button>
+        <button type="button" data-nav="classifier" class="nav-btn px-3 py-2 rounded-lg text-sm font-medium transition-colors">
+          Классификатор
+        </button>
         <button type="button" data-nav="norms" class="nav-btn px-3 py-2 rounded-lg text-sm font-medium transition-colors">
           Ключи и нормы
         </button>
@@ -3510,6 +3513,8 @@ const state = {
   view: 'catalog',
   categoryFilter: 'all',
   searchQuery: '',
+  classifierDomain: 'all',
+  classifierQuery: '',
   profile: { age: 28, sex: 'all', name: '' },
   activeTestId: null,
   testMode: 'step',
@@ -3637,6 +3642,9 @@ function render() {
     main.innerHTML = renderHistoryView();
     bindHistoryEvents();
     renderSummaryChart();
+  } else if (state.view === 'classifier') {
+    main.innerHTML = renderClassifierView();
+    bindClassifierEvents();
   } else if (state.view === 'norms') {
     main.innerHTML = renderNormsView();
   }
@@ -4136,6 +4144,8 @@ function renderResultView() {
           </div>
         </div>
 
+        ${renderProvisionalDiagnosisBlock(rec)}
+
         <div class="mt-6 pt-6 border-t border-slate-100">
           <h2 class="text-xs font-bold uppercase tracking-wider text-slate-500 mb-3">Расшифровка по ключам методики</h2>
           <div class="overflow-x-auto">
@@ -4167,6 +4177,8 @@ function bindResultEvents() {
   document.getElementById('resBackCatalogBtn').addEventListener('click', () => { state.view = 'catalog'; render(); });
   document.getElementById('retakeTestBtn').addEventListener('click', () => startTest(rec.testId));
   document.getElementById('printReportBtn').addEventListener('click', () => window.print());
+  const openClsBtn = document.getElementById('openClassifierFromResultBtn');
+  if (openClsBtn) openClsBtn.addEventListener('click', () => { state.view = 'classifier'; render(); window.scrollTo({ top: 0, behavior: 'smooth' }); });
   document.getElementById('copyReportBtn').addEventListener('click', () => {
     const r = rec.result;
     const lines = [
@@ -4179,6 +4191,7 @@ function bindResultEvents() {
       'Рекомендации: ' + r.recommendation,
       'Возрастная норма: ' + r.ageNote,
       ...(r.safetyFlag ? ['КРИТИЧЕСКИЙ ФЛАГ: ' + r.safetyMessage] : []),
+      ...getProvisionalDiagnosisTextLines(rec),
       '--- Разбор по ключам ---',
       ...r.keyBreakdown.map(k => '• ' + k.label + ': ' + k.value + ' (' + k.note + ')')
     ];
@@ -4329,6 +4342,590 @@ function renderSummaryChart() {
 }
 
 // -------------------- VIEW 5: О МЕТОДИКАХ, КЛЮЧАХ И НОРМАХ --------------------
+
+// ============================================================================
+// 8.5. СРАВНИТЕЛЬНЫЙ КЛАССИФИКАТОР (МКБ-10 / МКБ-11 / DSM-5) И ГИПОТЕЗЫ
+// ============================================================================
+
+const CLASSIFIER_DOMAINS = [
+  { id: 'all', label: 'Все разделы' },
+  { id: 'mood', label: 'Аффективные (депрессия и БАР)' },
+  { id: 'anxiety', label: 'Тревожные, ОКР и стресс' },
+  { id: 'neurodev', label: 'Нейроразвитие' },
+  { id: 'eating_somatic', label: 'РПП, соматизация и сон' },
+  { id: 'personality', label: 'Личность и акцентуации' },
+  { id: 'crisis', label: 'Суицидальный риск' }
+];
+
+const DISORDER_CLASSIFIER = [
+  {
+    domain: 'mood', domainLabel: 'Аффективные расстройства',
+    name: 'Депрессивный эпизод (единичный)',
+    icd10: 'F32 (F32.0 лёгкий, F32.1 умеренный, F32.2 тяжёлый)',
+    icd11: '6A70 (Депрессивное расстройство, единичный эпизод)',
+    dsm5: 'Major Depressive Disorder, Single Episode (296.2x)',
+    diff: 'В МКБ-11 и DSM-5 усилена роль квалификаторов (тревожный дистресс, меланхолические, смешанные черты); убрана жёсткая дихотомия «соматический синдром» из МКБ-10.',
+    testIds: ['phq9', 'bdi', 'hads', 'dass21']
+  },
+  {
+    domain: 'mood', domainLabel: 'Аффективные расстройства',
+    name: 'Рекуррентное депрессивное расстройство',
+    icd10: 'F33 (F33.0–F33.3)',
+    icd11: '6A71 (Рекуррентное депрессивное расстройство)',
+    dsm5: 'Major Depressive Disorder, Recurrent (296.3x)',
+    diff: 'Требует наличия не менее 2 депрессивных эпизодов в анамнезе без мании/гипомании; в МКБ-11 добавлены уточнения по ремиссии и психотическим симптомам.',
+    testIds: ['phq9', 'bdi', 'hads']
+  },
+  {
+    domain: 'mood', domainLabel: 'Аффективные расстройства',
+    name: 'Дистимия (персистирующее депрессивное расстройство)',
+    icd10: 'F34.1 (Дистимия)',
+    icd11: '6A72 (Дистимическое расстройство)',
+    dsm5: 'Persistent Depressive Disorder / Dysthymia (300.4)',
+    diff: 'В DSM-5 объединяет хроническую большую депрессию и дистимию (длительность ≥2 года у взрослых, ≥1 год у подростков); в МКБ-11 сохранена как самостоятельная рубрика 6A72.',
+    testIds: ['phq9', 'bdi', 'bhs']
+  },
+  {
+    domain: 'mood', domainLabel: 'Аффективные расстройства',
+    name: 'Биполярное аффективное расстройство I типа',
+    icd10: 'F31 (Биполярное аффективное расстройство — без деления на I и II тип)',
+    icd11: '6A60 (Биполярное расстройство I типа)',
+    dsm5: 'Bipolar I Disorder (296.4x–296.7)',
+    diff: 'В МКБ-11 впервые официально выделены БАР I (≥1 маниакальный или смешанный эпизод) и БАР II, аналогично DSM-5.',
+    testIds: ['mdq', 'asrm', 'hcl33']
+  },
+  {
+    domain: 'mood', domainLabel: 'Аффективные расстройства',
+    name: 'Биполярное аффективное расстройство II типа',
+    icd10: 'F31.8 (Другие биполярные аффективные расстройства)',
+    icd11: '6A61 (Биполярное расстройство II типа)',
+    dsm5: 'Bipolar II Disorder (296.89)',
+    diff: 'Требует ≥1 гипоманиакального эпизода (≥4 дней) и ≥1 депрессивного эпизода при отсутствии развёрнутой мании; ключевая мишень скрининга HCL-33 и MDQ.',
+    testIds: ['hcl33', 'mdq', 'asrm']
+  },
+  {
+    domain: 'mood', domainLabel: 'Аффективные расстройства',
+    name: 'Циклотимия',
+    icd10: 'F34.0 (Циклотимия)',
+    icd11: '6A62 (Циклотимическое расстройство)',
+    dsm5: 'Cyclothymic Disorder (301.13)',
+    diff: 'Хроническая нестабильность настроения (≥2 года) с подпороговыми гипоманиакальными и депрессивными симптомами.',
+    testIds: ['hcl33', 'mdq', 'shmishek']
+  },
+  {
+    domain: 'mood', domainLabel: 'Аффективные расстройства',
+    name: 'Смешанное депрессивное и тревожное расстройство',
+    icd10: 'F41.2 (Смешанное тревожное и депрессивное расстройство)',
+    icd11: '6A73 (Смешанное депрессивное и тревожное расстройство)',
+    dsm5: 'Не выделено как самостоятельный диагноз (кодируется как депрессия с тревожным дистрессом)',
+    diff: 'В МКБ-11 перенесено из блока тревожных (F41.2) в блок депрессивных расстройств (6A73); в DSM-5 отсутствует как отдельная единица.',
+    testIds: ['hads', 'dass21', 'phq9', 'gad7']
+  },
+  {
+    domain: 'anxiety', domainLabel: 'Тревожные, ОКР и стрессовые расстройства',
+    name: 'Генерализованное тревожное расстройство (ГТР)',
+    icd10: 'F41.1 (Генерализованное тревожное расстройство)',
+    icd11: '6B00 (Генерализованное тревожное расстройство)',
+    dsm5: 'Generalized Anxiety Disorder (300.02)',
+    diff: 'В МКБ-11 подчёркивается стойкое беспокойство «в течение нескольких месяцев» (в DSM-5 строго ≥6 месяцев) и расширен перечень соматико-когнитивных симптомов.',
+    testIds: ['gad7', 'shars', 'stai', 'dass21', 'hads']
+  },
+  {
+    domain: 'anxiety', domainLabel: 'Тревожные, ОКР и стрессовые расстройства',
+    name: 'Паническое расстройство',
+    icd10: 'F41.0 (Паническое расстройство)',
+    icd11: '6B01 (Паническое расстройство)',
+    dsm5: 'Panic Disorder (300.01)',
+    diff: 'Повторяющиеся неожиданные панические атаки + тревога ожидания; в МКБ-11 и DSM-5 паническое расстройство и агорафобия (6B02) кодируются раздельно.',
+    testIds: ['shars', 'gad7', 'dass21']
+  },
+  {
+    domain: 'anxiety', domainLabel: 'Тревожные, ОКР и стрессовые расстройства',
+    name: 'Социальное тревожное расстройство (социофобия)',
+    icd10: 'F40.1 (Социальные фобии)',
+    icd11: '6B04 (Социальное тревожное расстройство)',
+    dsm5: 'Social Anxiety Disorder (300.23)',
+    diff: 'В МКБ-11 и DSM-5 расширено понимание социальной тревоги за пределы «малых групп» (страх негативной оценки в любых социальных/публичных ситуациях).',
+    testIds: ['lsas', 'stai', 'phillips']
+  },
+  {
+    domain: 'anxiety', domainLabel: 'Тревожные, ОКР и стрессовые расстройства',
+    name: 'Тревожное расстройство разлуки / школьная тревожность',
+    icd10: 'F93.0 / F93.2 (Тревожные расстройства детского возраста)',
+    icd11: '6B05 (Тревожное расстройство разлуки)',
+    dsm5: 'Separation Anxiety Disorder (309.21)',
+    diff: 'В МКБ-11 и DSM-5 убрано жёсткое возрастное ограничение (перенесено из «детского» блока F93 в общий блок тревожных расстройств 6B00–6B0Z).',
+    testIds: ['phillips', 'gad7', 'stai']
+  },
+  {
+    domain: 'anxiety', domainLabel: 'Тревожные, ОКР и стрессовые расстройства',
+    name: 'Обсессивно-компульсивное расстройство (ОКР)',
+    icd10: 'F42 (Обсессивно-компульсивное расстройство)',
+    icd11: '6B20 (Обсессивно-компульсивное расстройство)',
+    dsm5: 'Obsessive-Compulsive Disorder (300.3)',
+    diff: 'В МКБ-11 и DSM-5 выведено из группы тревожных в отдельный кластер ОКР-спектра (6B20–6B2Z) с оценкой степени критики (insight).',
+    testIds: ['shars', 'stai', 'smol']
+  },
+  {
+    domain: 'anxiety', domainLabel: 'Тревожные, ОКР и стрессовые расстройства',
+    name: 'ПТСР и комплексное ПТСР (кПТСР)',
+    icd10: 'F43.1 (ПТСР) / F62.0 (Хроническое изменение личности)',
+    icd11: '6B40 (ПТСР) и 6B41 (Комплексное ПТСР)',
+    dsm5: 'Posttraumatic Stress Disorder (309.81; кПТСР отдельно не выделено)',
+    diff: 'В МКБ-11 впервые официально введено комплексное ПТСР (6B41: нарушения самоорганизации — аффективная дисрегуляция, негативная Я-концепция, трудности в отношениях).',
+    testIds: ['dass21', 'bdi', 'isi', 'tas20']
+  },
+  {
+    domain: 'neurodev', domainLabel: 'Расстройства нейроразвития',
+    name: 'Расстройство аутистического спектра (РАС)',
+    icd10: 'F84.0 (Детский аутизм), F84.1 (Атипичный), F84.5 (Синдром Аспергера)',
+    icd11: '6A02 (Расстройство аутистического спектра)',
+    dsm5: 'Autism Spectrum Disorder (299.00)',
+    diff: 'В МКБ-11 (как и в DSM-5) все подтипы F84 (включая синдром Аспергера) объединены в единый спектр 6A02 с квалификаторами интеллекта и функциональной речи.',
+    testIds: ['aq10', 'raads14', 'catq', 'tas20']
+  },
+  {
+    domain: 'neurodev', domainLabel: 'Расстройства нейроразвития',
+    name: 'Синдром дефицита внимания и гиперактивности (СДВГ)',
+    icd10: 'F90.0 (Нарушение активности и внимания)',
+    icd11: '6A05 (Синдром дефицита внимания и гиперактивности)',
+    dsm5: 'Attention-Deficit/Hyperactivity Disorder (314.00 / 314.01)',
+    diff: 'В МКБ-11 перенесено в блок расстройств нейроразвития (6A05) с официальным признанием у взрослых и выделением подтипов (невнимательный, гиперактивный, комбинированный).',
+    testIds: ['asrs']
+  },
+  {
+    domain: 'neurodev', domainLabel: 'Расстройства нейроразвития',
+    name: 'Расстройства интеллектуального развития',
+    icd10: 'F70–F79 (Умственная отсталость)',
+    icd11: '6A00 (Расстройства интеллектуального развития)',
+    dsm5: 'Intellectual Developmental Disorder (317–319)',
+    diff: 'В МКБ-11 и DSM-5 акцент смещён с одного лишь балла IQ на сочетание когнитивного функционирования и адаптивного поведения (2+ стандартных отклонения ниже нормы).',
+    testIds: ['raven']
+  },
+  {
+    domain: 'eating_somatic', domainLabel: 'РПП, соматизация и сон',
+    name: 'Нервная анорексия',
+    icd10: 'F50.0 (Нервная анорексия)',
+    icd11: '6B80 (Нервная анорексия)',
+    dsm5: 'Anorexia Nervosa (307.1)',
+    diff: 'В МКБ-11 и DSM-5 исключён обязательный критерий аменореи; в МКБ-11 введены градации по ИМТ (6B80.0 / 6B80.1) и паттернам поведения.',
+    testIds: ['eat26', 'debq']
+  },
+  {
+    domain: 'eating_somatic', domainLabel: 'РПП, соматизация и сон',
+    name: 'Нервная булимия',
+    icd10: 'F50.2 (Нервная булимия)',
+    icd11: '6B81 (Нервная булимия)',
+    dsm5: 'Bulimia Nervosa (307.51)',
+    diff: 'В МКБ-11 и DSM-5 снижен частотный порог эпизодов переедания и компенсаторного поведения до ≥1 раза в неделю (в МКБ-10 — ≥2 раз в неделю).',
+    testIds: ['eat26', 'debq']
+  },
+  {
+    domain: 'eating_somatic', domainLabel: 'РПП, соматизация и сон',
+    name: 'Приступообразное (компульсивное) переедание',
+    icd10: 'F50.8 / F50.4 (Другие расстройства приёма пищи)',
+    icd11: '6B82 (Расстройство приступообразного переедания)',
+    dsm5: 'Binge-Eating Disorder (307.51)',
+    diff: 'Выделено как самостоятельный диагноз в DSM-5 и МКБ-11 (6B82): регулярные эпизоды утраты контроля над едой без компенсаторного очищения.',
+    testIds: ['debq', 'eat26']
+  },
+  {
+    domain: 'eating_somatic', domainLabel: 'РПП, соматизация и сон',
+    name: 'Расстройство телесного дистресса / соматизация',
+    icd10: 'F45.0–F45.1 (Соматизированное расстройство)',
+    icd11: '6C20 (Расстройство телесного дистресса)',
+    dsm5: 'Somatic Symptom Disorder (300.82)',
+    diff: 'В МКБ-11 и DSM-5 отказ от требования «медицинской необъяснимости» симптомов — решающим стал избыточный психоэмоциональный и поведенческий дистресс вокруг телесных жалоб.',
+    testIds: ['phq15', 'tas20', 'smol']
+  },
+  {
+    domain: 'eating_somatic', domainLabel: 'РПП, соматизация и сон',
+    name: 'Хроническая инсомния (расстройство сна)',
+    icd10: 'F51.0 (Неорганическая бессонница) / G47.0',
+    icd11: '7A00 (Хроническая инсомния — Глава 7)',
+    dsm5: 'Insomnia Disorder (780.52)',
+    diff: 'В МКБ-11 расстройства сна и бодрствования вынесены в отдельную Главу 7 (7A00–7B2Z) и больше не делятся искусственно на «органическую» и «неорганическую» бессонницу.',
+    testIds: ['isi']
+  },
+  {
+    domain: 'personality', domainLabel: 'Личность и акцентуации',
+    name: 'Расстройство личности',
+    icd10: 'F60.0–F60.9 (Категориальные типы: шизоидное, пограничное, тревожное и др.)',
+    icd11: '6D10 (Дименсиональная модель: лёгкое 6D10.0, умеренное 6D10.1, тяжёлое 6D10.2)',
+    dsm5: 'Personality Disorders (Кластеры A, B, C в Разделе II + альтернативная модель в Разделе III)',
+    diff: 'Главное новшество МКБ-11: отказ от отдельных категорий F60.x в пользу единого диагноза 6D10 с оценкой степени тяжести и 5 доменов черт (плюс пограничный паттерн 6D11.5).',
+    testIds: ['smol', 'cattell16pf', 'shmishek', 'tipi']
+  },
+  {
+    domain: 'personality', domainLabel: 'Личность и акцентуации',
+    name: 'Акцентуация личностных черт (не расстройство)',
+    icd10: 'Z73.1 (Акцентуированные личностные черты)',
+    icd11: '6D11 (Выраженные личностные черты или паттерны — квалификатор)',
+    dsm5: 'Не кодируется как психическое расстройство (вариант нормы)',
+    diff: 'Описывает заострённые черты характера, которые сами по себе являются вариантом нормы, но влияют на стрессоустойчивость и выбор психотерапевтической тактики.',
+    testIds: ['shmishek', 'cattell16pf', 'tipi', 'guilt45', 'tas20']
+  },
+  {
+    domain: 'crisis', domainLabel: 'Суицидальный риск',
+    name: 'Суицидальные мысли и суицидальное поведение',
+    icd10: 'R45.8 (Суицидальные мысли) / X60–X84 (Умышленное самоповреждение)',
+    icd11: 'MB26.A (Суицидальные мысли) / MB23.R (Суицидальное поведение)',
+    dsm5: 'Suicidal Behavior Disorder / Прочие состояния, являющиеся предметом клинического внимания (DSM-5-TR: T14.91)',
+    diff: 'Кодируются как самостоятельные маркеры клинической безопасности независимо от основного диагноза; требуют немедленного триажа и плана безопасности.',
+    testIds: ['cssrs', 'bhs', 'phq9', 'bdi']
+  }
+];
+
+function getProvisionalDiagnosis(rec) {
+  const r = rec.result;
+  const id = rec.testId;
+  const isNormal = r.severityColor === 'emerald';
+
+  // Personality / non-nosological tests always carry contextual framing
+  const personalityTests = ['smol', 'cattell16pf', 'tipi', 'shmishek', 'guilt45', 'tas20'];
+  if (personalityTests.includes(id)) {
+    if (isNormal) {
+      return {
+        isNormal: true,
+        headline: 'Клинических оснований для предположительного диагноза не выявлено',
+        detail: 'Личностные и характерологические опросники описывают индивидуально-психологические особенности (вариант нормы) и не предназначены для самостоятельной постановки психиатрического диагноза.'
+      };
+    }
+    return {
+      isNormal: false,
+      headline: 'Личностный / характерологический профиль с выраженными пиками (ориентиры для специалиста)',
+      icd10: id === 'shmishek' ? 'Z73.1 (Акцентуация личностных черт); дифференциально: F60 (Расстройство личности)' : 'Z73.1 (Акцентуация черт) / дифференциальная оценка по шкалам F32–F41, F60',
+      icd11: '6D11 (Выраженные личностные черты или паттерны); при стойкой дезадаптации — оценка по 6D10',
+      dsm5: 'Личностные черты в пределах нормы или скрининговый ориентир для оценки Personality Disorders (Раздел II/III)',
+      diffNote: 'Повышения по личностным опросникам отражают стиль реагирования, акцентуацию или текущую стрессовую реакцию и не равны диагнозу расстройства личности без оценки длительности и социальной дезадаптации.'
+    };
+  }
+
+  if (id === 'raven') {
+    if (r.numericScore >= 80) {
+      return {
+        isNormal: true,
+        headline: 'Признаков снижения невербального интеллекта не выявлено',
+        detail: 'Показатель IQ (' + r.numericScore + ') находится в пределах нормы или выше среднего.'
+      };
+    }
+    return {
+      isNormal: false,
+      headline: 'Сниженный показатель невербального интеллекта (требует очной нейропсихологической проверки)',
+      icd10: 'Дифференциально: F70 (Лёгкая умственная отсталость) или транзиторное когнитивное снижение (астения/депрессия)',
+      icd11: '6A00 (Расстройства интеллектуального развития — только при подтверждении снижения адаптивного поведения)',
+      dsm5: 'Intellectual Developmental Disorder (требует оценки адаптивного функционирования и полного теста Векслера)',
+      diffNote: 'Онлайн-скрининг матриц Равена чувствителен к усталости, тревоге и дефициту внимания — низкий балл не является диагнозом.'
+    };
+  }
+
+  if (isNormal) {
+    return {
+      isNormal: true,
+      headline: 'Клинических оснований для предположительного диагноза не выявлено',
+      detail: 'Результаты методики «' + rec.testCode + '» находятся в пределах нормативного диапазона.'
+    };
+  }
+
+  // Clinical screening tests with elevated scores
+  if (id === 'phq9' || id === 'bdi') {
+    const severe = r.severityColor === 'rose';
+    const mod = r.severityColor === 'orange';
+    return {
+      isNormal: false,
+      headline: severe ? 'Выраженный / тяжёлый депрессивный эпизод (предположительно)' : (mod ? 'Умеренный депрессивный эпизод (предположительно)' : 'Субклинический / лёгкий депрессивный эпизод (предположительно)'),
+      icd10: severe ? 'F32.2 (Тяжёлый депрессивный эпизод без психотических симптомов) / F33.2' : (mod ? 'F32.1 (Умеренный депрессивный эпизод) / F33.1' : 'F32.0 (Лёгкий депрессивный эпизод) / F34.1 (Дистимия)'),
+      icd11: severe ? '6A70.2 / 6A71.2 (Депрессивное расстройство, тяжёлый эпизод)' : (mod ? '6A70.1 / 6A71.1 (Депрессивное расстройство, умеренный эпизод)' : '6A70.0 (Лёгкий эпизод) / 6A72 (Дистимия)'),
+      dsm5: severe ? 'Major Depressive Disorder, Severe (296.23 / 296.33)' : (mod ? 'Major Depressive Disorder, Moderate (296.22 / 296.32)' : 'Major Depressive Disorder, Mild (296.21) / Persistent Depressive Disorder (300.4)'),
+      diffNote: 'На очном приёме важно исключить биполярную депрессию (БАР I/II — пройдите MDQ / HCL-33), соматические причины (гипотиреоз, анемия) и реакцию утраты.'
+    };
+  }
+
+  if (id === 'gad7' || id === 'stai' || id === 'shars') {
+    const isPanicLike = id === 'shars' && r.numericScore >= 30;
+    return {
+      isNormal: false,
+      headline: isPanicLike ? 'Генерализованное тревожное или паническое расстройство (предположительно)' : 'Тревожное расстройство / ГТР (предположительно)',
+      icd10: isPanicLike ? 'F41.1 (ГТР) / F41.0 (Паническое расстройство)' : 'F41.1 (Генерализованное тревожное расстройство)',
+      icd11: isPanicLike ? '6B00 (Генерализованное тревожное расстройство) / 6B01 (Паническое расстройство)' : '6B00 (Генерализованное тревожное расстройство)',
+      dsm5: isPanicLike ? 'Generalized Anxiety Disorder (300.02) / Panic Disorder (300.01)' : 'Generalized Anxiety Disorder (300.02)',
+      diffNote: 'Необходимо уточнить длительность тревоги (≥6 мес. для ГТР по DSM-5), исключить тиреотоксикоз, кардиологические причины и коморбидную депрессию.'
+    };
+  }
+
+  if (id === 'hads' || id === 'dass21') {
+    return {
+      isNormal: false,
+      headline: 'Тревожно-депрессивная симптоматика / дистресс (предположительно)',
+      icd10: 'F41.2 (Смешанное тревожное и депрессивное расстройство) / F32 (Депрессия) / F41.1 (ГТР)',
+      icd11: '6A73 (Смешанное депрессивное и тревожное расстройство) / 6A70 / 6B00',
+      dsm5: 'Major Depressive Disorder with Anxious Distress / Generalized Anxiety Disorder (300.02)',
+      diffNote: 'Ориентируйтесь на преобладающую субшкалу (тревога vs депрессия vs стресс); при расстройстве адаптации оценивается также F43.2 / 6B43.'
+    };
+  }
+
+  if (id === 'lsas') {
+    return {
+      isNormal: false,
+      headline: 'Социальное тревожное расстройство / социофобия (предположительно)',
+      icd10: 'F40.1 (Социальные фобии)',
+      icd11: '6B04 (Социальное тревожное расстройство)',
+      dsm5: 'Social Anxiety Disorder (300.23)',
+      diffNote: 'Дифференцировать с избегающим расстройством личности, агорафобией (6B02) и особенностями социального взаимодействия при РАС (6A02).'
+    };
+  }
+
+  if (id === 'phillips') {
+    return {
+      isNormal: false,
+      headline: 'Школьная / социальная тревожность детского и подросткового возраста (предположительно)',
+      icd10: 'F93.2 (Социальное тревожное расстройство в детском возрасте) / F93.0 / F40.1',
+      icd11: '6B04 (Социальное тревожное расстройство) / 6B05 (Тревожное расстройство разлуки)',
+      dsm5: 'Social Anxiety Disorder (300.23) / Separation Anxiety Disorder (309.21)',
+      diffNote: 'Оценить школьный буллинг, учебную перегрузку и возможные трудности обучения (6A03) или СДВГ (6A05).'
+    };
+  }
+
+  if (id === 'mdq' || id === 'asrm' || id === 'hcl33') {
+    return {
+      isNormal: false,
+      headline: 'Расстройство биполярного спектра / гипомания (предположительно)',
+      icd10: 'F31 (Биполярное аффективное расстройство) / F31.0 (Текущий эпизод гипомании) / F34.0 (Циклотимия)',
+      icd11: '6A60 (БАР I типа) / 6A61 (БАР II типа) / 6A62 (Циклотимия)',
+      dsm5: 'Bipolar I Disorder (296.4x) / Bipolar II Disorder (296.89) / Cyclothymic Disorder (301.13)',
+      diffNote: 'Критически важна очная верификация психиатром (длительность фаз ≥4 дней для гипомании, ≥7 дней для мании) и исключение ПРЛ, СДВГ и индукции ПАВ.'
+    };
+  }
+
+  if (id === 'isi') {
+    return {
+      isNormal: false,
+      headline: 'Нарушение сна / инсомния (предположительно)',
+      icd10: 'F51.0 (Бессонница неорганической этиологии) / G47.0 (Нарушения засыпания и поддержания сна)',
+      icd11: '7A00 (Хроническая инсомния) / 7A01 (Кратковременная инсомния)',
+      dsm5: 'Insomnia Disorder (780.52)',
+      diffNote: 'Уточнить длительность (≥3 мес. и ≥3 ночей/нед. для хронической инсомнии), исключить апноэ сна, синдром беспокойных ног и вторичную бессонницу при депрессии/ГТР.'
+    };
+  }
+
+  if (id === 'asrs') {
+    return {
+      isNormal: false,
+      headline: 'Синдром дефицита внимания и гиперактивности у взрослых (предположительно)',
+      icd10: 'F90.0 (Нарушение активности и внимания)',
+      icd11: '6A05 (Синдром дефицита внимания и гиперактивности)',
+      dsm5: 'Attention-Deficit/Hyperactivity Disorder (314.00 / 314.01)',
+      diffNote: 'Диагноз СДВГ требует подтверждения начала симптомов в детском возрасте (до 12 лет) и исключения имитирующих состояний (тревога, депрессия, БАР, дефицит сна).'
+    };
+  }
+
+  if (id === 'aq10' || id === 'raads14' || id === 'catq') {
+    return {
+      isNormal: false,
+      headline: 'Расстройство аутистического спектра у взрослых (предположительно)',
+      icd10: 'F84.5 (Синдром Аспергера) / F84.0 (Детский аутизм) / F84.1 (Атипичный аутизм)',
+      icd11: '6A02 (Расстройство аутистического спектра)',
+      dsm5: 'Autism Spectrum Disorder (299.00)',
+      diffNote: 'Скрининговые шкалы РАС могут давать ложноположительные результаты при социальной тревоге (6B04), СДВГ (6A05) и шизоидных чертах — требуется очное интервью (ADOS-2 / ADI-R).'
+    };
+  }
+
+  if (id === 'eat26' || id === 'debq') {
+    return {
+      isNormal: false,
+      headline: 'Нарушение / расстройство пищевого поведения (предположительно)',
+      icd10: 'F50.0 (Нервная анорексия) / F50.2 (Нервная булимия) / F50.8 (Другие РПП)',
+      icd11: '6B80 (Нервная анорексия) / 6B81 (Нервная булимия) / 6B82 (Приступообразное переедание)',
+      dsm5: 'Anorexia Nervosa (307.1) / Bulimia Nervosa (307.51) / Binge-Eating Disorder (307.51)',
+      diffNote: 'Окончательная рубрика зависит от ИМТ, наличия компенсаторного очищения и частоты эпизодов переедания; требуется очная оценка психиатра/психотерапевта.'
+    };
+  }
+
+  if (id === 'phq15') {
+    return {
+      isNormal: false,
+      headline: 'Расстройство телесного дистресса / соматизация (предположительно)',
+      icd10: 'F45.0 (Соматизированное расстройство) / F45.1 (Недифференцированное соматоформное)',
+      icd11: '6C20 (Расстройство телесного дистресса)',
+      dsm5: 'Somatic Symptom Disorder (300.82)',
+      diffNote: 'Перед установлением соматоформного диагноза обязательна соматическая диагностика у терапевта и оценка коморбидной депрессии и тревоги.'
+    };
+  }
+
+  if (id === 'cssrs' || id === 'bhs') {
+    return {
+      isNormal: false,
+      headline: 'Повышенный суицидальный риск / выраженная безнадёжность (маркер безопасности)',
+      icd10: 'R45.8 (Суицидальные мысли) + оценка основного аффективного расстройства (F31–F33)',
+      icd11: 'MB26.A (Суицидальные мысли) / MB23.R (Суицидальное поведение)',
+      dsm5: 'Suicidal Behavior Disorder / Прочие состояния клинического внимания (DSM-5-TR: T14.91)',
+      diffNote: 'Суицидальный риск — трансдиагностический маркер, требующий немедленной очной оценки врачом-психиатром и разработки плана безопасности.'
+    };
+  }
+
+  return null;
+}
+
+function getProvisionalDiagnosisTextLines(rec) {
+  const pd = getProvisionalDiagnosis(rec);
+  if (!pd) return [];
+  if (pd.isNormal) return ['--- Диагностический ориентир ---', pd.headline + ': ' + pd.detail];
+  return [
+    '--- Предположительные диагностические рубрики (НЕ ЯВЛЯЕТСЯ ДИАГНОЗОМ) ---',
+    'Гипотеза: ' + pd.headline,
+    'МКБ-10: ' + pd.icd10,
+    'МКБ-11: ' + pd.icd11,
+    'DSM-5: ' + pd.dsm5,
+    'Дифференциальный акцент: ' + pd.diffNote
+  ];
+}
+
+function renderProvisionalDiagnosisBlock(rec) {
+  const pd = getProvisionalDiagnosis(rec);
+  if (!pd) return '';
+  if (pd.isNormal) {
+    return `
+      <div class="mt-6 rounded-xl border border-emerald-200 bg-emerald-50/50 p-4">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <div class="text-xs font-bold uppercase tracking-wider text-emerald-800 mb-1">Диагностический ориентир (МКБ-10 · МКБ-11 · DSM-5)</div>
+            <div class="text-sm font-semibold text-slate-900">${pd.headline}</div>
+            <p class="text-xs text-slate-600 mt-1">${pd.detail}</p>
+          </div>
+          <button id="openClassifierFromResultBtn" type="button" class="no-print shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold bg-white border border-emerald-200 text-emerald-800 hover:bg-emerald-100 transition-colors">
+            Классификатор →
+          </button>
+        </div>
+      </div>`;
+  }
+  return `
+    <div class="mt-6 rounded-2xl border border-indigo-200 bg-indigo-50/40 p-5">
+      <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-3 mb-3">
+        <div>
+          <div class="text-xs font-bold uppercase tracking-wider text-indigo-800 mb-1">Предположительный диагноз / рубрики для очной проверки</div>
+          <div class="text-base font-bold text-slate-900">${pd.headline}</div>
+        </div>
+        <button id="openClassifierFromResultBtn" type="button" class="no-print shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold bg-white border border-indigo-200 text-indigo-800 hover:bg-indigo-100 transition-colors">
+          Открыть классификатор →
+        </button>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+        <div class="bg-white rounded-xl border border-slate-200 p-3">
+          <div class="text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">МКБ-10 (РФ)</div>
+          <div class="text-xs font-semibold text-slate-800 leading-relaxed">${pd.icd10}</div>
+        </div>
+        <div class="bg-white rounded-xl border border-teal-200 p-3">
+          <div class="text-[11px] font-bold uppercase tracking-wider text-teal-700 mb-1">МКБ-11 (ВОЗ)</div>
+          <div class="text-xs font-semibold text-slate-800 leading-relaxed">${pd.icd11}</div>
+        </div>
+        <div class="bg-white rounded-xl border border-indigo-200 p-3">
+          <div class="text-[11px] font-bold uppercase tracking-wider text-indigo-700 mb-1">DSM-5 / DSM-5-TR</div>
+          <div class="text-xs font-semibold text-slate-800 leading-relaxed">${pd.dsm5}</div>
+        </div>
+      </div>
+
+      <p class="text-xs text-slate-700 leading-relaxed"><strong>Дифференциальный акцент:</strong> ${pd.diffNote}</p>
+      <p class="text-[11px] text-slate-500 mt-2">Важно: опросник самоотчёта не является медицинским диагнозом. Указанные коды носят справочный характер и предназначены для обсуждения с врачом-психиатром или клиническим психологом.</p>
+    </div>`;
+}
+
+// -------------------- VIEW 4.5: СРАВНИТЕЛЬНЫЙ КЛАССИФИКАТОР --------------------
+function renderClassifierView() {
+  const q = state.classifierQuery.trim().toLowerCase();
+  const filtered = DISORDER_CLASSIFIER.filter(item => {
+    const domOk = state.classifierDomain === 'all' || item.domain === state.classifierDomain;
+    const textOk = !q || (item.name + ' ' + item.icd10 + ' ' + item.icd11 + ' ' + item.dsm5 + ' ' + item.diff + ' ' + item.domainLabel).toLowerCase().includes(q);
+    return domOk && textOk;
+  });
+
+  const domainBtns = CLASSIFIER_DOMAINS.map(d => {
+    const active = state.classifierDomain === d.id;
+    return `<button type="button" data-cls-dom="${d.id}" class="px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${active ? 'bg-teal-700 text-white' : 'bg-white text-slate-600 border border-slate-200 hover:border-teal-400'}">${d.label}</button>`;
+  }).join('');
+
+  const rowsHtml = filtered.map(item => {
+    const testBadges = (item.testIds || []).map(tid => {
+      const t = TESTS.find(x => x.id === tid);
+      if (!t) return '';
+      return `<button type="button" data-launch-test="${t.id}" class="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold bg-teal-50 text-teal-800 border border-teal-200 hover:bg-teal-700 hover:text-white transition-colors">${t.code} →</button>`;
+    }).join(' ');
+    return `
+      <tr class="border-b border-slate-100 hover:bg-slate-50/70 align-top">
+        <td class="py-3.5 pr-3">
+          <div class="text-[11px] font-semibold text-teal-700 uppercase tracking-wider mb-0.5">${item.domainLabel}</div>
+          <div class="font-bold text-slate-900 text-sm">${item.name}</div>
+          <div class="text-xs text-slate-500 mt-1.5 leading-relaxed">${item.diff}</div>
+        </td>
+        <td class="py-3.5 px-3 text-xs text-slate-800 font-medium">${item.icd10}</td>
+        <td class="py-3.5 px-3 text-xs text-teal-900 font-medium">${item.icd11}</td>
+        <td class="py-3.5 px-3 text-xs text-indigo-900 font-medium">${item.dsm5}</td>
+        <td class="py-3.5 pl-3">
+          <div class="flex flex-wrap gap-1.5">${testBadges}</div>
+        </td>
+      </tr>`;
+  }).join('');
+
+  return `
+    <div class="max-w-6xl mx-auto space-y-5">
+      <div class="bg-white rounded-2xl border border-slate-200 p-6 sm:p-7 shadow-xs">
+        <h1 class="text-xl sm:text-2xl font-bold text-slate-900 mb-2">Сравнительный классификатор ментальных расстройств (МКБ-10 · МКБ-11 · DSM-5)</h1>
+        <p class="text-sm text-slate-600 leading-relaxed mb-4">
+          Сопоставление основных клинических рубрик психических и поведенческих расстройств по действующей в РФ <strong>МКБ-10</strong>, новой классификации ВОЗ <strong>МКБ-11</strong> и американскому руководству <strong>DSM-5 / DSM-5-TR</strong> с прямым переходом к валидированным скрининговым методикам платформы.
+        </p>
+
+        <div class="flex flex-col sm:flex-row gap-3 mb-4">
+          <input id="classifierSearchInput" type="search" value="${state.classifierQuery.replace(/"/g, '&quot;')}" placeholder="Поиск по коду (F32, 6A70, 6A02, 6B00) или названию расстройства..."
+            class="flex-1 px-3.5 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:border-teal-500" />
+        </div>
+        <div class="flex flex-wrap gap-2 mb-5">${domainBtns}</div>
+
+        <div class="overflow-x-auto">
+          <table class="w-full text-left border-collapse min-w-[820px]">
+            <thead>
+              <tr class="border-b-2 border-slate-200 text-xs text-slate-500 uppercase">
+                <th class="pb-2.5 pr-3 font-semibold w-[28%]">Расстройство и ключевые отличия</th>
+                <th class="pb-2.5 px-3 font-semibold w-[18%]">МКБ-10</th>
+                <th class="pb-2.5 px-3 font-semibold w-[19%]">МКБ-11 (ВОЗ)</th>
+                <th class="pb-2.5 px-3 font-semibold w-[19%]">DSM-5 / DSM-5-TR</th>
+                <th class="pb-2.5 pl-3 font-semibold w-[16%]">Методики на сайте</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rowsHtml || '<tr><td colspan="5" class="py-8 text-center text-sm text-slate-500">По вашему запросу рубрики не найдены.</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="mt-5 pt-4 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-slate-500">
+          <div>Справочная таблица составлена для врачей, клинических психологов и пациентов; не заменяет официальную диагностику.</div>
+          <a href="https://iris.who.int/server/api/core/bitstreams/dcf73611-9e0f-4d5c-85f6-85a58b0da6de/content" target="_blank" rel="noopener noreferrer" class="text-teal-700 hover:underline font-medium shrink-0">WHO ICD-11 CDDR (официальный источник ВОЗ) ↗</a>
+        </div>
+      </div>
+    </div>`;
+}
+
+function bindClassifierEvents() {
+  const input = document.getElementById('classifierSearchInput');
+  if (input) {
+    input.addEventListener('input', (e) => {
+      state.classifierQuery = e.target.value;
+      render();
+      const el = document.getElementById('classifierSearchInput');
+      if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+    });
+  }
+  document.querySelectorAll('[data-cls-dom]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.classifierDomain = btn.getAttribute('data-cls-dom');
+      render();
+    });
+  });
+  document.querySelectorAll('[data-launch-test]').forEach(btn => {
+    btn.addEventListener('click', () => startTest(btn.getAttribute('data-launch-test')));
+  });
+}
+
 function renderNormsView() {
   const rows = TESTS.map(t => `
     <tr class="border-b border-slate-100 align-top">
