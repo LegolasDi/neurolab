@@ -5569,6 +5569,11 @@ function renderHistoryView() {
     `;
   }
 
+  const latestByTest = {};
+  state.history.forEach(rec => {
+    if (!latestByTest[rec.testId]) latestByTest[rec.testId] = rec;
+  });
+
   const rows = state.history.map(rec => {
     const sev = severityClasses(rec.result.severityColor);
     return `
