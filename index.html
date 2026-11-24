@@ -5937,15 +5937,29 @@ function renderHistoryView() {
 
   const rows = state.history.map(rec => {
     const sev = severityClasses(rec.result.severityColor);
+    const pd = getProvisionalDiagnosis(rec);
+    const pdLine = pd && !pd.isNormal
+      ? `<div class="mt-2 pt-2 border-t border-slate-100 text-xs text-slate-700 space-y-0.5">
+           <div class="font-semibold text-indigo-900">${pd.headline}</div>
+           <div class="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-slate-600">
+             <span><strong>МКБ-10:</strong> ${pd.icd10}</span>
+             <span><strong>МКБ-11:</strong> ${pd.icd11}</span>
+             <span><strong>DSM-5:</strong> ${pd.dsm5}</span>
+           </div>
+         </div>`
+      : (pd && pd.isNormal
+        ? `<div class="mt-1.5 text-[11px] text-emerald-700">Диагностический ориентир: показатели в пределах нормы</div>`
+        : '');
     return `
       <div class="bg-white rounded-xl border border-slate-200 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:border-teal-300 transition-colors">
-        <div>
+        <div class="min-w-0">
           <div class="flex flex-wrap items-center gap-2 mb-1">
             <span class="px-2 py-0.5 rounded-md text-xs font-bold bg-slate-900 text-white">${rec.testCode}</span>
             <span class="font-bold text-slate-900 text-sm">${rec.testTitle}</span>
-            ${rec.result.safetyFlag ? '<span class="px-2 py-0.5 rounded-full text-xs font-bold bg-rose-100 text-rose-800">Флаг п. 9</span>' : ''}
+            ${rec.result.safetyFlag ? '<span class="px-2 py-0.5 rounded-full text-xs font-bold bg-rose-100 text-rose-800">Флаг безопасности</span>' : ''}
           </div>
-          <div class="text-xs text-slate-500">${rec.timestamp} · Возраст: ${rec.profile.age} лет ${rec.profile.name ? '· ' + rec.profile.name : ''}</div>
+          <div class="text-xs text-slate-500">${rec.timestamp} · Возраст: ${rec.profile.age > 0 ? rec.profile.age + ' лет' : 'не указан'} ${rec.profile.name ? '· ' + rec.profile.name : ''}</div>
+          ${pdLine}
         </div>
         <div class="flex flex-wrap items-center gap-3">
           <div class="text-right">
