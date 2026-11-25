@@ -1,8 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Замените vash-domen.ru на ваш реальный домен в зоне .ru перед загрузкой -->
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
-    <loc>https://vash-domen.ru/</loc>
+    <loc>https://legolasdi.github.io/neurolab/</loc>
     <lastmod>2026-11-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>1.0</priority>

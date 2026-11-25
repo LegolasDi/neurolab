@@ -1,5 +1,4 @@
 User-agent: *
 Allow: /
 
-# Замените vash-domen.ru на ваш реальный домен в зоне .ru
-Sitemap: https://vash-domen.ru/sitemap.xml
+Sitemap: https://legolasdi.github.io/neurolab/sitemap.xml
